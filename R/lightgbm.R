@@ -24,6 +24,11 @@
 #' the objective function occur before training should be halted.
 #' @param validation The _proportion_ of the training data that are used for
 #' performance assessment and potential early stopping.
+#' @param validation_groups A character vector specifying one or more variables in `x`
+#' used for grouping observations with the same value to either the training or
+#' validation set.
+#' @param rem_validation_groups A logical; should `validation_groups` be removed from `x`
+#' (columns are kept, but replaced with 0s)
 #' @param counts A logical; should `feature_fraction_bynode` be interpreted as the
 #' _number_ of predictors that will be randomly sampled at each split?
 #' `TRUE` indicates that `mtry` will be interpreted in its sense as a _count_,
@@ -40,6 +45,7 @@ train_lightgbm <- function(x, y, weights = NULL, max_depth = -1, num_iterations 
                            feature_fraction_bynode = 1, min_data_in_leaf = 20,
                            min_gain_to_split = 0, bagging_fraction = 1,
                            early_stopping_round = NULL, validation = 0,
+                           validation_groups = NULL, rem_validation_groups=T,
                            counts = TRUE, quiet = FALSE, ...) {
 
   force(x)
@@ -82,6 +88,7 @@ train_lightgbm <- function(x, y, weights = NULL, max_depth = -1, num_iterations 
   args <- process_bagging(args, ...)
 
   args <- process_data(args, x, y, weights, validation, missing(validation),
+                       validation_groups,rem_validation_groups,
                        early_stopping_round)
 
   args <- sort_args(args)
@@ -196,6 +203,7 @@ process_bagging <- function(args, ...) {
 }
 
 process_data <- function(args, x, y, weights, validation, missing_validation,
+                         validation_groups,rem_validation_groups,
                          early_stopping_round) {
   #                                           trn_index       | val_index
   #                                         ----------------------------------
@@ -206,6 +214,19 @@ process_data <- function(args, x, y, weights, validation, missing_validation,
 
   n <- nrow(x)
   needs_validation <- !is.null(early_stopping_round)
+  needs_validation_groups <- !is.null(validation_groups)
+
+  if (needs_validation_groups){
+    if (!is.character(validation_groups) | !is.vector(validation_groups)) {
+      rlang::abort("'validation_groups' should be a character vector")
+    }
+    if (!all(validation_groups %in% colnames(x))) {
+      rlang::abort("'validation_groups' should be columns named in 'x'")
+    }
+    if (!is.logical(rem_validation_groups)){
+      rlang::abort("'rem_validation_groups' should be a logical")
+    }
+  }
 
   if (missing_validation) {
     trn_index <- 1:n
@@ -215,10 +236,27 @@ process_data <- function(args, x, y, weights, validation, missing_validation,
       val_index <- NULL
     }
   } else {
-    m <- min(floor(n * (1 - validation)) + 1, n - 1)
-    trn_index <- sample(1:n, size = max(m, 2))
-    val_index <- setdiff(1:n, trn_index)
-  }
+    if (needs_validation_groups) {
+      sub_x<-x[validation_groups]
+      val_x<-dplyr::distinct(sub_x)
+      val_n<-nrow(val_x)
+
+      sub_m <- min(floor(val_n * (1 - validation)) + 1, val_n - 1)
+      sub_trn_index <- sample(1:val_n, size = max(sub_m, 2))
+
+      sub_index<-sapply(validation_groups,function(z) x[[z]] %in% sub_x[[z]][sub_trn_index])
+      sub_index<-rowSums(sub_index)==length(validation_groups)
+
+      trn_index<-which(sub_index)
+      val_index<-which(!sub_index)
+
+      if (rem_validation_groups) x[validation_groups]<-0
+
+    } else {
+      m <- min(floor(n * (1 - validation)) + 1, n - 1)
+      trn_index <- sample(1:n, size = max(m, 2))
+      val_index <- setdiff(1:n, trn_index)
+    }  }
 
   args$main$data <-
     lightgbm::lgb.Dataset(
