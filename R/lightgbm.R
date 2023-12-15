@@ -256,7 +256,8 @@ process_data <- function(args, x, y, weights, validation, missing_validation,
       m <- min(floor(n * (1 - validation)) + 1, n - 1)
       trn_index <- sample(1:n, size = max(m, 2))
       val_index <- setdiff(1:n, trn_index)
-    }  }
+    }
+  }
 
   args$main$data <-
     lightgbm::lgb.Dataset(
